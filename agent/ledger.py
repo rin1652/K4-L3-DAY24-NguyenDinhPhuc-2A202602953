@@ -1,6 +1,6 @@
-"""BƯỚC 3d — audit ledger append-only, tamper-evident (10').
+"""BƯỚC 3e — audit ledger append-only, tamper-evident (10').
 
-JSONL, mỗi tool call một dòng. Đọc CHECKPOINTS.md (§3d).
+JSONL, mỗi tool call một dòng. Đọc CHECKPOINTS.md (§3e).
 
 Interface bắt buộc (tests/test_ledger.py và agent/runner.py gọi trực tiếp):
 
@@ -37,12 +37,74 @@ rồi gọi verify() phải trả về False.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 
 def append(entry: dict, path: Path) -> dict:
-    raise NotImplementedError("BƯỚC 3d: implement ledger append")
+    """Ghi thêm một bản ghi vào audit ledger với hash chain."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    prev_hash = "0" * 64
+    if path.exists():
+        content = path.read_text(encoding="utf-8")
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if lines:
+            last_entry = json.loads(lines[-1])
+            prev_hash = last_entry.get("hash", "0" * 64)
+
+    record = dict(entry)
+    record["prev_hash"] = prev_hash
+
+    # Tính sha256 trên nội dung record đã có prev_hash (chưa có hash)
+    canonical = json.dumps(record, sort_keys=True, ensure_ascii=False)
+    record["hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    return record
 
 
 def verify(path: Path) -> bool:
-    raise NotImplementedError("BƯỚC 3d: implement ledger verify")
+    """Kiểm tra tính toàn vẹn của hash chain và điều kiện non-empty reason trong ledger."""
+    path = Path(path)
+    if not path.exists():
+        return True
+
+    content = path.read_text(encoding="utf-8")
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if not lines:
+        return True
+
+    expected_prev = "0" * 64
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except Exception:
+            return False
+
+        # 1. Reason không được để trống
+        reason = entry.get("reason")
+        if not reason or not str(reason).strip():
+            return False
+
+        # 2. prev_hash phải khớp với hash của dòng trước đó
+        stored_prev = entry.get("prev_hash")
+        if stored_prev != expected_prev:
+            return False
+
+        # 3. Tính lại hash để kiểm tra dòng có bị sửa đổi không
+        stored_hash = entry.get("hash")
+        copy_entry = {k: v for k, v in entry.items() if k != "hash"}
+        canonical = json.dumps(copy_entry, sort_keys=True, ensure_ascii=False)
+        recalculated_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        if recalculated_hash != stored_hash:
+            return False
+
+        expected_prev = stored_hash
+
+    return True
