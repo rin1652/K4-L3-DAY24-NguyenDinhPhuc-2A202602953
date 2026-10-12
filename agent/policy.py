@@ -34,7 +34,14 @@ không phải xác thực người dùng production.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+PRINCIPALS_FILE = BASE_DIR / "data" / "principals.json"
+VALID_CLASSIFICATIONS = {"public", "internal", "restricted"}
 
 
 @dataclass(frozen=True)
@@ -51,5 +58,66 @@ class PolicyContext:
     expires_at: str = ""
 
 
+def _load_principals() -> dict:
+    if PRINCIPALS_FILE.exists():
+        return json.loads(PRINCIPALS_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
 def check(context: PolicyContext) -> tuple[bool, str]:
-    raise NotImplementedError("BƯỚC 3b: implement policy check")
+    """Kiểm tra chính sách (PEP) trước khi thực thi tool.
+    
+    Luôn trả về (allow, reason) với reason không bao giờ được rỗng.
+    """
+    # 1. Kiểm tra data_classification hợp lệ
+    if context.data_classification not in VALID_CLASSIFICATIONS:
+        return False, f"Invalid data_classification: '{context.data_classification}'. Must be one of {VALID_CLASSIFICATIONS}"
+
+    # 2. Rule tối thiểu: data restricted đi kèm egress network phải lập tức DENY
+    # (Quy tắc này áp dụng tuyệt đối, kể cả khi principal là DPO)
+    if context.data_classification == "restricted" and context.egress_enabled:
+        return False, "Data classification is restricted and egress is enabled (minimum containment rule)"
+
+    # 3. Kiểm tra danh tính người ra lệnh (OBO - On-Behalf-Of)
+    if not context.principal_id:
+        return False, "Missing principal identity (principal_id is empty)"
+
+    principals = _load_principals()
+    if context.principal_id not in principals:
+        return False, f"Unknown principal ID: '{context.principal_id}'"
+
+    p_info = principals[context.principal_id]
+
+    # 4. Kiểm tra thời hạn hiệu lực (TTL/expiration)
+    if context.expires_at:
+        try:
+            exp_dt = datetime.fromisoformat(context.expires_at)
+            now_dt = datetime.now(timezone.utc)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            if now_dt > exp_dt:
+                return False, f"Token / run has expired at {context.expires_at}"
+        except Exception:
+            return False, f"Invalid expires_at format: {context.expires_at}"
+
+    # 5. Kiểm tra mục đích sử dụng (Purpose specification)
+    allowed_purposes = p_info.get("purposes", [])
+    if allowed_purposes and context.request_purpose and context.request_purpose not in allowed_purposes:
+        return False, f"Purpose '{context.request_purpose}' is not authorized for principal '{context.principal_id}'"
+
+    # 6. Kiểm tra quyền của Principal đối với requested_tool
+    principal_allowed_tools = set(p_info.get("allowed_tools", []))
+    if context.requested_tool and context.requested_tool not in principal_allowed_tools:
+        return False, f"Principal '{context.principal_id}' is not authorized to use tool '{context.requested_tool}'"
+
+    # 7. Kiểm tra phạm vi quyền của Agent (agent_scopes)
+    if context.requested_tool and context.agent_scopes and context.requested_tool not in context.agent_scopes:
+        return False, f"Requested tool '{context.requested_tool}' exceeds agent scopes"
+
+    # 8. Kiểm tra phân quyền ủy nhiệm (delegation hierarchy)
+    if context.delegation_depth > 0:
+        if context.requested_tool and context.requested_tool not in context.parent_scopes:
+            return False, f"Delegation depth {context.delegation_depth}: tool '{context.requested_tool}' exceeds parent scopes"
+
+    # 9. Cho phép khi mọi điều kiện đều thỏa mãn
+    return True, f"Authorized: tool '{context.requested_tool}' allowed for principal '{context.principal_id}' (purpose: {context.request_purpose})"
