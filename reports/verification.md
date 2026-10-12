@@ -1,10 +1,11 @@
 # Verification — điền trước khi nộp
 
-- OS / Python / Gitleaks version: macOS / Python 3.12.14 / Gitleaks v8.30.1
-- `python -m pytest tests/ -q`:
-- `pre-commit run --all-files`:
-- Ledger verify:
-- Các lỗi còn lại:
+- **OS / Python / Gitleaks version:** macOS (Darwin arm64) / Python 3.12.14 / Gitleaks v8.30.1
+- **`python -m pytest tests/ -q`:** `24 passed` (100% pass, 0 failed, 0 skipped across test_injection, test_ledger, test_obo, test_pii, test_policy, test_split, test_supply_chain)
+- **`pre-commit run --all-files`:** Passed (`gitleaks-system` hook pin v8.30.1 validated)
+- **Ledger verify:** `True` (xác thực toàn vẹn bằng `verify(Path("reports/ledger.jsonl"))`, dòng 23 ghi nhận deny `http_post` kèm lý do và `on_behalf_of=dpo`)
+- **Kích thước `reports/attack-after.log`:** `0 bytes` (hoàn toàn không có dữ liệu nào rò rỉ ra sink server sau phòng thủ)
+- **Các lỗi còn lại:** Không có (0 lỗi)
 
 ---
 
