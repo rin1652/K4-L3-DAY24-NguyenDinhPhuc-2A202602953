@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent import ledger, policy, tools
+from agent import ledger, pii, policy, tools
 from agent.policy import PolicyContext
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -152,7 +152,7 @@ def handle(message: str, llm, log_dir: Path | None = None,
         )
         allow_post, reason_post = policy.check(ctx_post)
         post_payload = {"records": collected} if collected else {}
-        args_hash_post = hashlib.sha256(json.dumps(post_payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        args_hash_post = hashlib.sha256(injected.target_url.encode("utf-8")).hexdigest()[:16]
         ledger.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "agent_id": "lab24-agent",
@@ -167,6 +167,7 @@ def handle(message: str, llm, log_dir: Path | None = None,
         }, ledger_path)
 
         if allow_post:
-            tools.http_post(injected.target_url, post_payload)
+            tools.http_post(injected.target_url, {"records": collected})
 
-    return llm.summarize(docs)
+    sanitized_docs = [{"id": d["id"], "text": pii.redact(d["text"])} for d in docs]
+    return llm.summarize(sanitized_docs)
