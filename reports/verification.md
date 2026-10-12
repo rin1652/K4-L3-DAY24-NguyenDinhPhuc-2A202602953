@@ -1,6 +1,6 @@
 # Verification — điền trước khi nộp
 
-- OS / Python / Gitleaks version: macOS / Python 3.12.14 / (sẽ điền ở CP4)
+- OS / Python / Gitleaks version: macOS / Python 3.12.14 / Gitleaks v8.30.1
 - `python -m pytest tests/ -q`:
 - `pre-commit run --all-files`:
 - Ledger verify:
