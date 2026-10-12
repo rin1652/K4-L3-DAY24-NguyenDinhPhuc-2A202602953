@@ -30,10 +30,80 @@ set ở tests/vn_pii_testset.jsonl):
 """
 from __future__ import annotations
 
+import re
+
+
+def _overlaps(start1: int, end1: int, start2: int, end2: int) -> bool:
+    return max(start1, start2) < min(end1, end2)
+
 
 def detect(text: str) -> list[dict]:
-    raise NotImplementedError("BƯỚC 3a: implement PII detection")
+    """Phát hiện các thực thể PII phổ biến của Việt Nam trong chuỗi text.
+    
+    Bốn loại: VN_CCCD, VN_PHONE, VN_BANK_ACCOUNT, EMAIL.
+    Trả về danh sách dict {"type": ..., "start": ..., "end": ...} sắp xếp theo vị trí xuất hiện.
+    """
+    candidates = []
+
+    # 1. VN_BANK_ACCOUNT: 8-16 chữ số, có từ khóa chỉ dẫn như STK, số tài khoản, tài khoản
+    for m in re.finditer(r"(?i)\b(?:STK|số tài khoản|tài khoản|TK)\s*:?\s*(\d{8,16})\b", text):
+        candidates.append({
+            "type": "VN_BANK_ACCOUNT",
+            "start": m.start(1),
+            "end": m.end(1),
+            "priority": 1,
+        })
+
+    # 2. EMAIL: định dạng chuẩn local@domain.tld
+    for m in re.finditer(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", text):
+        candidates.append({
+            "type": "EMAIL",
+            "start": m.start(),
+            "end": m.end(),
+            "priority": 1,
+        })
+
+    # 3. VN_CCCD: 12 chữ số liên tiếp
+    for m in re.finditer(r"\b\d{12}\b", text):
+        candidates.append({
+            "type": "VN_CCCD",
+            "start": m.start(),
+            "end": m.end(),
+            "priority": 2,
+        })
+
+    # 4. VN_PHONE: 10 chữ số bắt đầu bằng 0 (hoặc có phân tách dấu cách / gạch ngang)
+    for m in re.finditer(r"\b0(?:\d{9}|\d{3}[-.\s]\d{3}[-.\s]\d{3}|\d{2}[-.\s]\d{3,4}[-.\s]\d{4})\b", text):
+        candidates.append({
+            "type": "VN_PHONE",
+            "start": m.start(),
+            "end": m.end(),
+            "priority": 3,
+        })
+
+    # Xử lý vùng chồng lấn (overlap): ưu tiên theo priority và độ dài chuỗi
+    candidates.sort(key=lambda c: (c["priority"], -(c["end"] - c["start"])))
+    selected = []
+    for cand in candidates:
+        if not any(_overlaps(cand["start"], cand["end"], s["start"], s["end"]) for s in selected):
+            selected.append({
+                "type": cand["type"],
+                "start": cand["start"],
+                "end": cand["end"],
+            })
+
+    # Sắp xếp theo thứ tự xuất hiện trong văn bản
+    selected.sort(key=lambda e: e["start"])
+    return selected
 
 
 def redact(text: str) -> str:
-    raise NotImplementedError("BƯỚC 3a: implement PII redaction")
+    """Thay thế các thực thể PII được phát hiện bằng [REDACTED_<TYPE>].
+    
+    Thay thế từ cuối chuỗi về đầu để không làm lệch chỉ số offset của các vùng phía trước.
+    """
+    entities = detect(text)
+    for entity in sorted(entities, key=lambda e: e["start"], reverse=True):
+        replacement = f"[REDACTED_{entity['type']}]"
+        text = text[: entity["start"]] + replacement + text[entity["end"] :]
+    return text
